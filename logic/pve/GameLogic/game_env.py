@@ -176,6 +176,7 @@ class GameEnvironment(gym.Env):
         self.unit: Unit = None
         self.factory: Factory = None
         self.markets: List[Market] = []
+        self._market_by_pos: Dict[Tuple[int, int], Market] = {}
         self.money: float = 0.0
         self.compute: float = 0.0
         self.score: float = 0.0
@@ -196,6 +197,7 @@ class GameEnvironment(gym.Env):
                          max_hp=cfg.unit_hp, capacity=cfg.unit_capacity)
         self.factory = Factory(cfg)
         self.markets = build_markets(self.board.market_positions, cfg)
+        self._market_by_pos = {(m.x, m.y): m for m in self.markets}
 
         self.money = cfg.initial_money
         self.compute = cfg.initial_compute
@@ -278,19 +280,16 @@ class GameEnvironment(gym.Env):
             return False, 0.0
 
         if action == Action.BUY:
-            mkt_pos = board.nearest_market(u.x, u.y)
-            if mkt_pos is None:
-                return False, 0.0
-            mkt = self._market_at(*mkt_pos)
+            mkt = self._adjacent_market()
             if mkt is None or u.free_capacity < 1:
                 return False, 0.0
-            # Buy the product with highest profit margin (price - cost) we can afford
+            # Buy the product with best resale margin against other currently reachable markets.
             best_pid, best_cost = self._best_buyable(mkt)
             if best_pid is None:
                 return False, 0.0
             cost = best_cost
             self.money -= cost
-            u.add_product(best_pid, 1.0)
+            u.add_product(best_pid, 1.0, origin_market_id=mkt.id)
             u.state = "loading"
             u.busy_ticks = max(1, int(0.25 / cfg.time_step))
             u.busy_action = "buy_done"
@@ -298,18 +297,15 @@ class GameEnvironment(gym.Env):
 
         if action in SELL_ACTIONS:
             pid = int(action) - int(Action.SELL_0)
-            mkt_pos = board.nearest_market(u.x, u.y)
-            if mkt_pos is None:
-                return False, 0.0
-            mkt = self._market_at(*mkt_pos)
+            mkt = self._adjacent_market()
             if mkt is None:
                 return False, 0.0
-            qty = u.prod_inv.get(pid, 0.0)
+            qty = u.sellable_product_qty(pid, market_id=mkt.id)
             if qty <= 0:
                 return False, 0.0
             mult = self._price_multiplier()
             revenue = mkt.get_price(pid, self.time, mult) * qty
-            u.prod_inv[pid] = 0.0
+            u.take_sellable_product(pid, qty, market_id=mkt.id)
             self.money += revenue
             self.score += revenue * cfg.score_factor
             u.state = "selling"
@@ -421,22 +417,40 @@ class GameEnvironment(gym.Env):
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _market_at(self, x: int, y: int) -> Optional[Market]:
-        for m in self.markets:
-            if m.x == x and m.y == y:
-                return m
-        return None
+        return self._market_by_pos.get((x, y))
+
+    def _adjacent_market(self, x: Optional[int] = None, y: Optional[int] = None) -> Optional[Market]:
+        if x is None or y is None:
+            x, y = self.unit.x, self.unit.y
+        mkt_pos = self.board.nearest_market(x, y)
+        if mkt_pos is None:
+            return None
+        return self._market_at(*mkt_pos)
+
+    def _buy_price(self, mkt: Market, pid: int) -> float:
+        return max(0.0, mkt.get_price(pid, self.time) + self.factory.cost_delta)
+
+    def _best_resale_price(self, pid: int, exclude_market_id: Optional[int] = None) -> float:
+        mult = self._price_multiplier()
+        prices = [
+            m.get_price(pid, self.time, mult)
+            for m in self.markets
+            if exclude_market_id is None or m.id != exclude_market_id
+        ]
+        if not prices:
+            return -float("inf")
+        return max(prices)
 
     def _best_buyable(self, mkt: Market) -> Tuple[Optional[int], float]:
-        """Return (pid, cost) of product with highest profit (price - cost) we can afford."""
+        """Return (pid, cost) of the affordable product with best current cross-market resale margin."""
         best_pid, best_cost = None, None
         best_profit = -float("inf")
-        mult = self._price_multiplier()
-        for pid, pdef in PRODUCT_DEFS.items():
-            cost = max(0, pdef["cost"] + self.factory.cost_delta)
+        for pid in PRODUCT_DEFS:
+            cost = self._buy_price(mkt, pid)
             if self.money < cost:
                 continue
-            price = mkt.get_price(pid, self.time, mult)
-            profit = price - cost
+            resale_price = self._best_resale_price(pid, exclude_market_id=mkt.id)
+            profit = resale_price - cost
             if profit > best_profit:
                 best_profit, best_cost, best_pid = profit, cost, pid
         return best_pid, best_cost

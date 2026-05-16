@@ -7,12 +7,12 @@ Phase 1 action space (20 discrete actions):
   2  MOVE_DOWN     – x + 1
   3  MOVE_LEFT     – y - 1
   4  MOVE_RIGHT    – y + 1
-  5  BUY           – buy cheapest product at adjacent market
-  6  SELL_0        – sell all carried product-0 (semiconductor) at adjacent market
-  7  SELL_1        – sell all carried product-1 (medicine)
-  8  SELL_2        – sell all carried product-2 (small_goods)
-  9  SELL_3        – sell all carried product-3 (clothing)
-  10 SELL_4        – sell all carried product-4 (food)
+  5  BUY           – buy the best affordable product at the adjacent market
+  6  SELL_0        – sell all eligible carried product-0 (semiconductor) at adjacent market
+  7  SELL_1        – sell all eligible carried product-1 (medicine)
+  8  SELL_2        – sell all eligible carried product-2 (small_goods)
+  9  SELL_3        – sell all eligible carried product-3 (clothing)
+ 10 SELL_4        – sell all eligible carried product-4 (food)
   11 HARVEST       – harvest raw materials from nearby resource point
   12 DEPOSIT       – deposit unit's raw_inv into factory (must be at factory)
   13 PRODUCE_0     – queue product-0 for production (at factory, costs raw_stock)
@@ -134,16 +134,16 @@ def compute_action_mask(env: "GameEnvironment") -> np.ndarray:
             mask[act] = True
 
     # BUY: adjacent market + capacity + money
-    mkt = board.nearest_market(u.x, u.y)
+    mkt = env._adjacent_market(u.x, u.y)
     if mkt is not None:
-        best_cost = min(pdef["cost"] for pdef in PRODUCT_DEFS.values())
-        if u.free_capacity >= 1 and env.money >= best_cost:
+        _, best_cost = env._best_buyable(mkt)
+        if u.free_capacity >= 1 and best_cost is not None:
             mask[Action.BUY] = True
 
         # SELL_pid: carrying that product type
         for sell_act in SELL_ACTIONS:
             pid = sell_act - Action.SELL_0
-            if u.prod_inv.get(pid, 0.0) > 0:
+            if u.sellable_product_qty(pid, market_id=mkt.id) > 0:
                 mask[sell_act] = True
 
     # HARVEST: nearby non-depleted resource + capacity

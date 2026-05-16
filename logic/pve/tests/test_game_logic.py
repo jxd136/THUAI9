@@ -132,6 +132,99 @@ def test_sell_empty_inventory_invalid(easy_env):
     assert info["action_valid"] is False
 
 
+def test_buy_uses_live_market_price_and_tracks_origin(easy_env):
+    easy_env.reset()
+    market = easy_env.markets[0]
+    easy_env.unit.x, easy_env.unit.y = market.x, market.y
+    expected_pid, expected_cost = easy_env._best_buyable(market)
+    initial_money = easy_env.money
+
+    _, _, _, _, info = easy_env.step(Action.BUY)
+
+    assert info["action_valid"] is True
+    assert easy_env.money == pytest.approx(initial_money - expected_cost)
+    assert easy_env.unit.prod_inv.get(expected_pid, 0.0) == pytest.approx(1.0)
+    assert easy_env.unit.prod_lots[expected_pid][0].origin_market_id == market.id
+
+
+def test_sell_only_consumes_lots_from_other_markets(easy_env):
+    easy_env.reset()
+    pid = 0
+    market_a, market_b = easy_env.markets[:2]
+    u = easy_env.unit
+    u.clear_products()
+    u.add_product(pid, 1.0, origin_market_id=market_a.id)
+    u.add_product(pid, 1.0, origin_market_id=market_b.id)
+    u.x, u.y = market_a.x, market_a.y
+    initial_money = easy_env.money
+    expected_revenue = market_a.get_price(pid, easy_env.time, easy_env._price_multiplier())
+
+    _, _, _, _, info = easy_env.step(Action.SELL_0 + pid)
+
+    assert info["action_valid"] is True
+    assert easy_env.money == pytest.approx(initial_money + expected_revenue)
+    assert u.prod_inv.get(pid, 0.0) == pytest.approx(1.0)
+    assert u.prod_lots[pid][0].origin_market_id == market_a.id
+    assert u.sellable_product_qty(pid, market_id=market_a.id) == pytest.approx(0.0)
+
+
+def test_action_mask_blocks_same_market_resale(easy_env):
+    easy_env.reset()
+    pid = 0
+    market = easy_env.markets[0]
+    u = easy_env.unit
+    u.clear_products()
+    u.add_product(pid, 1.0, origin_market_id=market.id)
+    u.x, u.y = market.x, market.y
+
+    mask = easy_env.action_masks()
+
+    assert not mask[Action.SELL_0 + pid]
+
+
+def test_clear_products_resets_origin_batches(easy_env):
+    easy_env.reset()
+    market = easy_env.markets[0]
+    u = easy_env.unit
+    u.add_product(0, 1.0, origin_market_id=market.id)
+    u.raw_inv = 3.0
+
+    u.clear_products()
+
+    assert u.prod_inv == {}
+    assert u.prod_lots == {}
+    assert u.raw_inv == 0.0
+
+
+def test_factory_loaded_goods_keep_sell_option_when_mixed(easy_env):
+    easy_env.reset()
+    pid = 0
+    market = easy_env.markets[0]
+    u = easy_env.unit
+    u.clear_products()
+    u.add_product(pid, 1.0, origin_market_id=market.id)
+    easy_env.factory.products[pid] = 1.0
+    u.x, u.y = easy_env.cfg.factory_x, easy_env.cfg.factory_y
+
+    _, _, _, _, info = easy_env.step(Action.LOAD)
+
+    assert info["action_valid"] is True
+    assert u.prod_inv.get(pid, 0.0) == pytest.approx(2.0)
+    assert [lot.origin_market_id for lot in u.prod_lots[pid]] == [market.id, None]
+
+    u.busy_ticks = 0
+    u.x, u.y = market.x, market.y
+    start_money = easy_env.money
+    expected_revenue = market.get_price(pid, easy_env.time, easy_env._price_multiplier())
+
+    _, _, _, _, sell_info = easy_env.step(Action.SELL_0 + pid)
+
+    assert sell_info["action_valid"] is True
+    assert easy_env.money == pytest.approx(start_money + expected_revenue)
+    assert u.prod_inv.get(pid, 0.0) == pytest.approx(1.0)
+    assert [lot.origin_market_id for lot in u.prod_lots[pid]] == [market.id]
+
+
 # ── Action mask ───────────────────────────────────────────────────────────────
 
 def test_action_mask_shape(easy_env):

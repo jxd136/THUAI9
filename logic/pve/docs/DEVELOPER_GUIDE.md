@@ -171,9 +171,9 @@ price(t) = base + amplitude × (1 + sin(2π·t / period + phase)) / 2
 - `phase`：每市场随机偏移，防止各市场同步
 - `period`：`market_period × random(0.7, 1.5)`
 
-BUY 动作执行时购买"当前可负担商品中利润最高的"（见 `_best_buyable`），即市价 − 成本的差值最大的商品。
+BUY 动作执行时按当前市场价买入"当前可负担且跨市场转卖利润最高的"商品（见 `_best_buyable`），即“其他市场当前最高卖价 − 当前买价”最大的商品。
 
-卖价还会乘以 `factory.price_multiplier`（默认 1.0，购买 marketing 科技后变为 1.1）。
+卖价还会乘以 `factory.price_multiplier`（默认 1.0，购买 marketing 科技后变为 1.1）。从市场买入的货物会按批次记录来源市场，同市场只能卖出来源不同的批次；工厂产出的货物不带市场来源，可在任意市场出售。
 
 价格归一化使用每种商品各自的 val_range（`_PRICE_NORM` 字典），不再使用全局 `_PRICE_MIN/_PRICE_MAX`。
 
@@ -204,8 +204,8 @@ class Action(IntEnum):
 | 动作 | 有效条件 |
 | --- | --- |
 | 移动 | 目标格可通行，busy_ticks = 0 |
-| BUY | Manhattan ≤ 1 有市场；容量 ≥ 1；money ≥ 最低成本 |
-| SELL_pid | Manhattan ≤ 1 有市场；prod_inv[pid] > 0 |
+| BUY | Manhattan ≤ 1 有市场；容量 ≥ 1；存在当前可负担商品 |
+| SELL_pid | Manhattan ≤ 1 有市场；存在可在该市场出售的 pid 批次 |
 | HARVEST | Manhattan ≤ 2 有未耗尽资源点；容量 ≥ 1 |
 | DEPOSIT | 在工厂格；raw_inv > 0 |
 | PRODUCE_pid | 在工厂格；raw_stock ≥ raw_cost；队列未满 |
